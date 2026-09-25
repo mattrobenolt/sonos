@@ -1,0 +1,11 @@
+[package]
+name = "sonos"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+# runtime_shaders: compile Metal shaders at app startup instead of invoking
+# the proprietary `xcrun metal` at build time. Same approach nixpkgs'
+# zed-editor uses on darwin, where the Metal shader compiler is unavailable.
+gpui = { version = "0.2", features = ["runtime_shaders"] }
+roxmltree = "0.21"
