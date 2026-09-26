@@ -1,5 +1,43 @@
 # Decisions
 
+## App v1 (2026-09-25, c1f8b7d)
+
+- One window, dark card per group: label, now-playing line, drag volume
+  slider (on_drag + on_drag_move; DragMoveEvent carries element bounds),
+  −/+ steppers, room chips with × to ungroup, “+” opens a join menu.
+- Join menu offers standalone rooms only (single-member groups). Pulling a
+  room out of another multiroom group via SetAVTransportURI is untested;
+  keep it that way until verified.
+- Coordinator room chip has no ×: removing a coordinator restructures the
+  group. Matches the first-party app's behavior.
+- Poll, not events: SSDP discover (2s) + snapshot every 2s on the background
+  executor. Optimistic volume updates, corrected by the next poll. GENA
+  eventing is the upgrade path if the poll feels wrong.
+- SOAP calls fire on the background executor into a parked task vec
+  (dropping a pending Task cancels it).
+- Tests: fixture-driven parser tests (live captures; the Plex token in the
+  position fixture is redacted) + #[ignore] LAN tests including a
+  join/leave round trip that restores state.
+
+## v1.1 fixes from first use (2026-09-25)
+
+- **Slider cross-talk + volume lag had one root cause:** `on_drag_move` fires
+  on EVERY element whose listener matches the drag payload's `TypeId`, not
+  just the originating element. All four sliders acted on every drag event
+  (~240 SOAP calls/s), queuing seconds of speaker lag. Fix: the drag payload
+  carries its group index; handlers ignore foreign drags. Volume sends now
+  coalesce through a sender loop (newest value per coordinator IP, ticked at
+  120 ms) — drag fill is optimistic/instant, speakers land the final value
+  within one tick of release.
+- Line-in/TV: RelTime/TrackDuration come back as NOT_IMPLEMENTED strings;
+  filtered at the protocol layer (treated as absent). Now-playing falls back
+  to "Playing (line-in / TV)" when playing with neither metadata nor times.
+- Groups sorted by label in snapshot(): the topology XML order shuffles on
+  group changes; the UI needed stable indices for drag payloads.
+- Window opens at 420x880 and the card column scrolls when it overflows
+  (`.id("main").overflow_y_scroll()`). Auto-grow to content would mean
+  resizing per snapshot — deliberately not done.
+
 ## Scope — macOS Sonos controller, LAN-only (2026-09-25)
 
 Three features, nothing else planned:

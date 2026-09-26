@@ -68,8 +68,9 @@ pub fn position_info(ip: Ipv4Addr) -> Result<NowPlaying> {
 /// embedded DIDL-Lite metadata; line-in/TV sources carry none, so times are
 /// the only signal there.
 pub fn parse_position(response: &str) -> Result<NowPlaying> {
-    let rel_time = soap::text(response, "RelTime").ok().filter(|t| !t.is_empty());
-    let track_duration = soap::text(response, "TrackDuration").ok().filter(|t| !t.is_empty());
+    // Line-in/TV sources report NOT_IMPLEMENTED for times; treat as absent.
+    let rel_time = clean_time(soap::text(response, "RelTime").ok());
+    let track_duration = clean_time(soap::text(response, "TrackDuration").ok());
     let mut now_playing = NowPlaying {
         title: None,
         artist: None,
@@ -83,6 +84,10 @@ pub fn parse_position(response: &str) -> Result<NowPlaying> {
         }
     }
     Ok(now_playing)
+}
+
+fn clean_time(value: Option<String>) -> Option<String> {
+    value.filter(|t| !t.is_empty() && t != "NOT_IMPLEMENTED")
 }
 
 pub struct Didl {

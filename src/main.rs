@@ -3,7 +3,9 @@
 //! The protocol lives in the `sonos` lib crate, GPUI-free; this binary only
 //! renders state and issues control commands (see docs/decisions.md).
 
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{
@@ -15,6 +17,7 @@ use sonos::{control, discover, snapshot, GroupView, SystemState};
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const DISCOVER_TIMEOUT: Duration = Duration::from_secs(2);
 const SLIDER_WIDTH: f32 = 160.;
+const VOLUME_SEND_INTERVAL: Duration = Duration::from_millis(120);
 
 fn accent() -> gpui::Rgba {
     rgb(0xe8a13d)
@@ -25,7 +28,9 @@ fn dim() -> gpui::Rgba {
 }
 
 #[derive(Clone, Copy)]
-struct SliderDrag;
+struct SliderDrag {
+    group: usize,
+}
 
 /// Invisible drag ghost; GPUI requires a Render view for drag sources.
 struct SliderGhost {}
@@ -37,18 +42,61 @@ impl Render for SliderGhost {
 }
 
 struct SonosApp {
-    ips: Vec<Ipv4Addr>,
     state: Option<SystemState>,
     add_menu: Option<usize>,
     /// Fire-and-forget SOAP tasks. Dropping a pending Task cancels it, so
     /// they are parked here; old ones have long completed by the time this
     /// fills up.
     tasks: Vec<Task<()>>,
+    /// Latest desired group volume by coordinator IP. Drag events arrive far
+    /// faster than SOAP calls complete; the sender loop coalesces to the
+    /// newest value per group.
+    desired: Arc<Mutex<HashMap<Ipv4Addr, u8>>>,
     _poll: Option<Task<()>>,
+    _sender: Option<Task<()>>,
 }
 
 impl SonosApp {
     fn new(cx: &mut Context<Self>) -> Self {
+        let desired: Arc<Mutex<HashMap<Ipv4Addr, u8>>> = Arc::new(Mutex::new(HashMap::new()));
+        let sender_desired = desired.clone();
+        let sender = cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut last_sent: HashMap<Ipv4Addr, u8> = HashMap::new();
+            loop {
+                cx.background_executor().timer(VOLUME_SEND_INTERVAL).await;
+                let mut pending: Vec<(Ipv4Addr, u8)> = Vec::new();
+                {
+                    let desired = sender_desired.lock().unwrap();
+                    for (ip, volume) in desired.iter() {
+                        if last_sent.get(ip) != Some(volume) {
+                            pending.push((*ip, *volume));
+                        }
+                    }
+                }
+                if pending.is_empty() {
+                    continue;
+                }
+                let results = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let mut results = Vec::new();
+                        for (ip, volume) in &pending {
+                            results.push((
+                                *ip,
+                                *volume,
+                                control::set_group_volume(*ip, *volume).is_ok(),
+                            ));
+                        }
+                        results
+                    })
+                    .await;
+                for (ip, volume, sent) in results {
+                    if sent {
+                        last_sent.insert(ip, volume);
+                    }
+                }
+            }
+        });
         let poll = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| loop {
             let ips = cx
                 .background_executor()
@@ -62,9 +110,6 @@ impl SonosApp {
             let has_groups = !state.groups.is_empty();
             this
                 .update(cx, |this, cx| {
-                    if !ips.is_empty() {
-                        this.ips = ips;
-                    }
                     if has_groups || this.state.is_none() {
                         this.state = Some(state);
                     }
@@ -74,11 +119,12 @@ impl SonosApp {
             cx.background_executor().timer(POLL_INTERVAL).await;
         });
         Self {
-            ips: Vec::new(),
             state: None,
             add_menu: None,
             tasks: Vec::new(),
+            desired,
             _poll: Some(poll),
+            _sender: Some(sender),
         }
     }
 
@@ -100,20 +146,21 @@ impl SonosApp {
         if let Some(view) = self.state.as_mut().and_then(|s| s.groups.get_mut(group)) {
             view.volume = Some(volume);
         }
-        cx.notify();
         if let Some(ip) = self.coordinator_ip(group) {
-            self.fire(cx, move || {
-                let _ = control::set_group_volume(ip, volume);
-            });
+            self.desired.lock().unwrap().insert(ip, volume);
         }
+        cx.notify();
     }
 
     fn step_volume(&mut self, group: usize, delta: i32, cx: &mut Context<Self>) {
-        if let Some(ip) = self.coordinator_ip(group) {
-            self.fire(cx, move || {
-                let _ = control::relative_group_volume(ip, delta);
-            });
-        }
+        let current = self
+            .state
+            .as_ref()
+            .and_then(|s| s.groups.get(group))
+            .and_then(|view| view.volume)
+            .unwrap_or(0) as i32;
+        let next = (current + delta).clamp(0, 100) as u8;
+        self.set_volume(group, next, cx);
     }
 
     fn leave(&mut self, room_ip: Ipv4Addr, cx: &mut Context<Self>) {
@@ -159,11 +206,17 @@ impl SonosApp {
             .w(px(SLIDER_WIDTH))
             .h_6()
             .cursor_pointer()
-            .on_drag(SliderDrag, |_: &SliderDrag, _, _, cx| {
-                cx.new(|_| SliderGhost {})
-            })
+            .on_drag(
+                SliderDrag { group: index },
+                |_: &SliderDrag, _, _, cx| cx.new(|_| SliderGhost {}),
+            )
             .on_drag_move::<SliderDrag>(cx.listener(
                 move |this, ev: &DragMoveEvent<SliderDrag>, _, cx| {
+                    // During a drag, every on_drag_move listener of this
+                    // payload type fires; only the originating slider acts.
+                    if ev.drag(cx).group != index {
+                        return;
+                    }
                     let fraction =
                         (ev.event.position.x - ev.bounds.left()) / ev.bounds.size.width;
                     let volume = (fraction.clamp(0., 1.) * 100.).round() as u8;
@@ -203,12 +256,11 @@ impl SonosApp {
                 np.title.as_deref().unwrap_or_default(),
                 np.artist.as_deref().unwrap_or(""),
             ),
-            Some(np) if playing => {
-                let rel = np.rel_time.as_deref().unwrap_or("0:00:00");
-                let dur = np.track_duration.as_deref().unwrap_or("");
-                format!("{rel} / {dur}")
-            }
-            _ if playing => "Playing".to_string(),
+            Some(np) if playing => match (&np.rel_time, &np.track_duration) {
+                (Some(rel), Some(dur)) => format!("{rel} / {dur}"),
+                _ => "Playing (line-in / TV)".to_string(),
+            },
+            _ if playing => "Playing (line-in / TV)".to_string(),
             _ => "Nothing playing".to_string(),
         };
 
@@ -364,9 +416,11 @@ impl Render for SonosApp {
         }
 
         div()
+            .id("main")
             .flex()
             .flex_col()
             .size_full()
+            .overflow_y_scroll()
             .bg(rgb(0x1b1b1f))
             .p_4()
             .gap_3()
@@ -400,7 +454,7 @@ impl Render for SonosApp {
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(400.), px(640.)), cx);
+        let bounds = Bounds::centered(None, size(px(420.), px(880.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

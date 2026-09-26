@@ -58,3 +58,20 @@ fn rejects_not_implemented_metadata() {
     assert!(control::parse_didl("NOT_IMPLEMENTED").is_none());
     assert!(control::parse_didl("").is_none());
 }
+
+#[test]
+fn treats_not_implemented_times_as_absent() {
+    let response = concat!(
+        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body>",
+        "<u:GetPositionInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">",
+        "<Track>1</Track>",
+        "<TrackDuration>NOT_IMPLEMENTED</TrackDuration>",
+        "<TrackMetaData>NOT_IMPLEMENTED</TrackMetaData>",
+        "<RelTime>NOT_IMPLEMENTED</RelTime>",
+        "</u:GetPositionInfoResponse></s:Body></s:Envelope>",
+    );
+    let np = control::parse_position(response).unwrap();
+    assert!(np.rel_time.is_none());
+    assert!(np.track_duration.is_none());
+    assert!(np.title.is_none());
+}

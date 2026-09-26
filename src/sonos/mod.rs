@@ -109,7 +109,7 @@ pub struct SystemState {
 pub fn snapshot(ips: &[Ipv4Addr]) -> SystemState {
     for &ip in ips {
         if let Ok(groups) = topology::zone_groups(ip) {
-            let groups = std::thread::scope(|scope| {
+            let mut groups: Vec<GroupView> = std::thread::scope(|scope| {
                 let handles: Vec<_> = groups
                     .into_iter()
                     .map(|group| {
@@ -131,6 +131,9 @@ pub fn snapshot(ips: &[Ipv4Addr]) -> SystemState {
                     .collect();
                 handles.into_iter().map(|h| h.join().unwrap()).collect()
             });
+            // Stable display order: the topology XML order shuffles on
+            // group changes.
+            groups.sort_by(|a, b| a.group.label().cmp(&b.group.label()));
             return SystemState { groups };
         }
     }
