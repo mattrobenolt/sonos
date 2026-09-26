@@ -12,7 +12,11 @@ fn parses_live_topology() {
     assert_eq!(groups.len(), 4);
 
     let office = groups.iter().find(|g| g.label() == "Office").unwrap();
-    assert_eq!(office.rooms.len(), 2, "stereo pair: one visible, one invisible twin");
+    assert_eq!(
+        office.rooms.len(),
+        2,
+        "stereo pair: one visible, one invisible twin"
+    );
     assert_eq!(office.rooms.iter().filter(|r| r.invisible).count(), 1);
     assert_eq!(office.coordinator_ip().unwrap().to_string(), "192.168.2.91");
 
@@ -27,7 +31,13 @@ fn parses_live_topology() {
 
 #[test]
 fn parses_group_volume() {
-    let volume = control::parse_group_volume(&fixture("getgroupvolume_response.xml")).unwrap();
+    let volume = control::parse_volume(&fixture("getgroupvolume_response.xml")).unwrap();
+    assert!(volume <= 100, "volume out of range: {volume}");
+}
+
+#[test]
+fn parses_room_volume() {
+    let volume = control::parse_volume(&fixture("getvolume_response.xml")).unwrap();
     assert!(volume <= 100, "volume out of range: {volume}");
 }
 

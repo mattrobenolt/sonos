@@ -2,7 +2,7 @@
 
 use std::net::Ipv4Addr;
 
-use super::{soap, Group, Result, Room};
+use super::{Group, Result, Room, soap};
 
 /// Fetch and parse the household's zone groups from any live speaker.
 pub fn zone_groups(ip: Ipv4Addr) -> Result<Vec<Group>> {
@@ -24,12 +24,18 @@ pub fn zone_groups(ip: Ipv4Addr) -> Result<Vec<Group>> {
 pub fn parse_groups(state: &str) -> Result<Vec<Group>> {
     let doc = roxmltree::Document::parse(state)?;
     let mut groups = Vec::new();
-    for node in doc.descendants().filter(|n| n.tag_name().name() == "ZoneGroup") {
+    for node in doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "ZoneGroup")
+    {
         let Some(coordinator_uuid) = node.attribute("Coordinator") else {
             continue;
         };
         let mut rooms = Vec::new();
-        for member in node.children().filter(|n| n.tag_name().name() == "ZoneGroupMember") {
+        for member in node
+            .children()
+            .filter(|n| n.tag_name().name() == "ZoneGroupMember")
+        {
             let (Some(uuid), Some(name), Some(ip)) = (
                 member.attribute("UUID"),
                 member.attribute("ZoneName"),
@@ -41,7 +47,10 @@ pub fn parse_groups(state: &str) -> Result<Vec<Group>> {
                 uuid: uuid.to_string(),
                 name: name.to_string(),
                 ip,
-                invisible: member.attribute("Invisible").map(|v| v == "1").unwrap_or(false),
+                invisible: member
+                    .attribute("Invisible")
+                    .map(|v| v == "1")
+                    .unwrap_or(false),
             });
         }
         groups.push(Group {

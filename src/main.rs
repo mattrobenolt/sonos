@@ -3,15 +3,15 @@
 //! The protocol lives in the `sonos` lib crate, GPUI-free; this binary only
 //! renders state and issues control commands (see docs/decisions.md).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{
-    App, Application, AsyncApp, Bounds, Context, DragMoveEvent, FontWeight, Render, Task,
-    TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb,
-    size,
+    App, Application, AsyncApp, Bounds, Context, DragMoveEvent, FontWeight, MouseButton, Render,
+    Task, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div, prelude::*, px,
+    rgb, size,
 };
 use sonos::{GroupView, SystemState, control, discover, snapshot};
 
@@ -19,6 +19,9 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const DISCOVER_TIMEOUT: Duration = Duration::from_secs(2);
 const SLIDER_WIDTH: f32 = 160.;
 const VOLUME_SEND_INTERVAL: Duration = Duration::from_millis(120);
+/// Press-and-hold this long on a volume slider to split the card into
+/// per-speaker sliders (or merge back), like the first-party app.
+const HOLD_TO_SPLIT: Duration = Duration::from_millis(450);
 
 fn accent() -> gpui::Rgba {
     rgb(0xe8a13d)
@@ -28,9 +31,31 @@ fn dim() -> gpui::Rgba {
     rgb(0x8b8b96)
 }
 
+/// Which volume a slider drives.
+#[derive(Clone, Copy, PartialEq)]
+enum SliderTarget {
+    Group(usize),
+    Room { group: usize, room: usize },
+}
+
 #[derive(Clone, Copy)]
 struct SliderDrag {
-    group: usize,
+    target: SliderTarget,
+}
+
+/// A pending press-and-hold on a slider. Dropping the Task cancels the
+/// timer; the hold only applies if the timer fires while still pending.
+struct PendingHold {
+    target: SliderTarget,
+    /// Never read on purpose: dropping it cancels the hold timer.
+    _task: Task<()>,
+}
+
+/// What volume a desired-map entry drives.
+#[derive(Hash, PartialEq, Eq, Clone, Copy)]
+enum VolumeTarget {
+    Group(Ipv4Addr),
+    Room(Ipv4Addr),
 }
 
 /// Invisible drag ghost; GPUI requires a Render view for drag sources.
@@ -45,32 +70,35 @@ impl Render for SliderGhost {
 struct SonosApp {
     state: Option<SystemState>,
     add_menu: Option<usize>,
+    /// Group keys (coordinator uuids) whose cards show per-speaker sliders.
+    split: HashSet<String>,
+    pending_hold: Option<PendingHold>,
     /// Fire-and-forget SOAP tasks. Dropping a pending Task cancels it, so
     /// they are parked here; old ones have long completed by the time this
     /// fills up.
     tasks: Vec<Task<()>>,
-    /// Latest desired group volume by coordinator IP. Drag events arrive far
-    /// faster than SOAP calls complete; the sender loop coalesces to the
-    /// newest value per group.
-    desired: Arc<Mutex<HashMap<Ipv4Addr, u8>>>,
+    /// Latest desired volume per target. Drag events arrive far faster
+    /// than SOAP calls complete; the sender loop coalesces to the newest
+    /// value per target.
+    desired: Arc<Mutex<HashMap<VolumeTarget, u8>>>,
     _poll: Option<Task<()>>,
     _sender: Option<Task<()>>,
 }
 
 impl SonosApp {
     fn new(cx: &mut Context<Self>) -> Self {
-        let desired: Arc<Mutex<HashMap<Ipv4Addr, u8>>> = Arc::new(Mutex::new(HashMap::new()));
+        let desired: Arc<Mutex<HashMap<VolumeTarget, u8>>> = Arc::new(Mutex::new(HashMap::new()));
         let sender_desired = desired.clone();
         let sender = cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let mut last_sent: HashMap<Ipv4Addr, u8> = HashMap::new();
+            let mut last_sent: HashMap<VolumeTarget, u8> = HashMap::new();
             loop {
                 cx.background_executor().timer(VOLUME_SEND_INTERVAL).await;
-                let mut pending: Vec<(Ipv4Addr, u8)> = Vec::new();
+                let mut pending: Vec<(VolumeTarget, u8)> = Vec::new();
                 {
                     let desired = sender_desired.lock().unwrap();
-                    for (ip, volume) in desired.iter() {
-                        if last_sent.get(ip) != Some(volume) {
-                            pending.push((*ip, *volume));
+                    for (target, volume) in desired.iter() {
+                        if last_sent.get(target) != Some(volume) {
+                            pending.push((*target, *volume));
                         }
                     }
                 }
@@ -81,19 +109,23 @@ impl SonosApp {
                     .background_executor()
                     .spawn(async move {
                         let mut results = Vec::new();
-                        for (ip, volume) in &pending {
-                            results.push((
-                                *ip,
-                                *volume,
-                                control::set_group_volume(*ip, *volume).is_ok(),
-                            ));
+                        for (target, volume) in &pending {
+                            let sent = match target {
+                                VolumeTarget::Group(ip) => {
+                                    control::set_group_volume(*ip, *volume).is_ok()
+                                }
+                                VolumeTarget::Room(ip) => {
+                                    control::set_room_volume(*ip, *volume).is_ok()
+                                }
+                            };
+                            results.push((*target, *volume, sent));
                         }
                         results
                     })
                     .await;
-                for (ip, volume, sent) in results {
+                for (target, volume, sent) in results {
                     if sent {
-                        last_sent.insert(ip, volume);
+                        last_sent.insert(target, volume);
                     }
                 }
             }
@@ -123,6 +155,8 @@ impl SonosApp {
         Self {
             state: None,
             add_menu: None,
+            split: HashSet::new(),
+            pending_hold: None,
             tasks: Vec::new(),
             desired,
             _poll: Some(poll),
@@ -149,13 +183,44 @@ impl SonosApp {
             .coordinator_ip()
     }
 
+    fn coordinator_key(&self, group: usize) -> Option<String> {
+        self.state
+            .as_ref()?
+            .groups
+            .get(group)
+            .map(|view| view.group.coordinator_uuid.clone())
+    }
+
     fn set_volume(&mut self, group: usize, volume: u8, cx: &mut Context<Self>) {
         if let Some(view) = self.state.as_mut().and_then(|s| s.groups.get_mut(group)) {
             view.volume = Some(volume);
         }
         if let Some(ip) = self.coordinator_ip(group) {
-            self.desired.lock().unwrap().insert(ip, volume);
+            self.desired
+                .lock()
+                .unwrap()
+                .insert(VolumeTarget::Group(ip), volume);
         }
+        cx.notify();
+    }
+
+    fn set_room_volume(&mut self, group: usize, room: usize, volume: u8, cx: &mut Context<Self>) {
+        let Some((uuid, ip)) = self
+            .state
+            .as_ref()
+            .and_then(|s| s.groups.get(group))
+            .and_then(|view| view.group.visible_rooms().nth(room))
+            .map(|room| (room.uuid.clone(), room.ip))
+        else {
+            return;
+        };
+        if let Some(view) = self.state.as_mut().and_then(|s| s.groups.get_mut(group)) {
+            view.room_volumes.insert(uuid, volume);
+        }
+        self.desired
+            .lock()
+            .unwrap()
+            .insert(VolumeTarget::Room(ip), volume);
         cx.notify();
     }
 
@@ -170,18 +235,68 @@ impl SonosApp {
         self.set_volume(group, next, cx);
     }
 
+    /// Eager: fold the leave into local state immediately; the poll corrects.
     fn leave(&mut self, room_ip: Ipv4Addr, cx: &mut Context<Self>) {
+        if let Some(state) = self.state.take() {
+            self.state = Some(state.left(room_ip));
+        }
+        cx.notify();
         self.fire(cx, move || {
             let _ = control::leave(room_ip);
         });
     }
 
+    /// Eager: fold the join into local state immediately; the poll corrects.
     fn join(&mut self, room_ip: Ipv4Addr, coordinator_uuid: String, cx: &mut Context<Self>) {
         self.add_menu = None;
+        if let Some(state) = self.state.take() {
+            self.state = Some(state.joined(room_ip, &coordinator_uuid));
+        }
         cx.notify();
         self.fire(cx, move || {
             let _ = control::join(room_ip, &coordinator_uuid);
         });
+    }
+
+    /// Press-and-hold on a slider: after HOLD_TO_SPLIT without a drag or a
+    /// release, split (group slider) or merge (room slider) that card.
+    fn begin_hold(&mut self, target: SliderTarget, cx: &mut Context<Self>) {
+        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            cx.background_executor().timer(HOLD_TO_SPLIT).await;
+            this.update(cx, |app, cx| {
+                let still_holding = app
+                    .pending_hold
+                    .as_ref()
+                    .is_some_and(|hold| hold.target == target);
+                if still_holding {
+                    app.pending_hold = None;
+                    app.toggle_split(target);
+                    cx.notify();
+                }
+            })
+            .ok();
+        });
+        self.pending_hold = Some(PendingHold {
+            target,
+            _task: task,
+        });
+    }
+
+    fn cancel_hold(&mut self) {
+        self.pending_hold = None;
+    }
+
+    fn toggle_split(&mut self, target: SliderTarget) {
+        let SliderTarget::Group(group) = target else {
+            return;
+        };
+        if let Some(key) = self.coordinator_key(group) {
+            if self.split.contains(&key) {
+                self.split.remove(&key);
+            } else {
+                self.split.insert(key);
+            }
+        }
     }
 
     fn note(text: &str) -> impl IntoElement {
@@ -215,29 +330,56 @@ impl SonosApp {
             }))
     }
 
-    fn volume_slider(&self, index: usize, volume: u8, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id(("slider", index))
+    fn volume_slider(
+        &self,
+        target: SliderTarget,
+        volume: u8,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let slider = match target {
+            SliderTarget::Group(group) => div().id(("slider", group)),
+            SliderTarget::Room { group, room } => div().id(("rslider", group * 16 + room)),
+        };
+        slider
             .flex()
             .items_center()
             .w(px(SLIDER_WIDTH))
             .h_6()
             .cursor_pointer()
-            .on_drag(SliderDrag { group: index }, |_: &SliderDrag, _, _, cx| {
+            .on_drag(SliderDrag { target }, |_: &SliderDrag, _, _, cx| {
                 cx.new(|_| SliderGhost {})
             })
             .on_drag_move::<SliderDrag>(cx.listener(
                 move |this, ev: &DragMoveEvent<SliderDrag>, _, cx| {
                     // During a drag, every on_drag_move listener of this
                     // payload type fires; only the originating slider acts.
-                    if ev.drag(cx).group != index {
+                    if ev.drag(cx).target != target {
                         return;
                     }
+                    // A drag cancels any pending press-and-hold.
+                    this.cancel_hold();
                     let fraction = (ev.event.position.x - ev.bounds.left()) / ev.bounds.size.width;
                     let volume = (fraction.clamp(0., 1.) * 100.).round() as u8;
-                    this.set_volume(index, volume, cx);
+                    match target {
+                        SliderTarget::Group(group) => this.set_volume(group, volume, cx),
+                        SliderTarget::Room { group, room } => {
+                            this.set_room_volume(group, room, volume, cx);
+                        }
+                    }
                 },
             ))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
+                    this.begin_hold(target, cx);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |this, _: &gpui::MouseUpEvent, _, _| {
+                    this.cancel_hold();
+                }),
+            )
             .child(
                 div()
                     .w_full()
@@ -284,6 +426,7 @@ impl SonosApp {
         // Display signal for real multi-room groups (a bonded stereo pair is
         // one visible room, not a group).
         let grouped = group.visible_rooms().count() > 1;
+        let split = self.split.contains(&coordinator_uuid);
 
         // Rooms that can join this group: standalone rooms from other groups.
         let joinable: Vec<(String, Ipv4Addr)> = state
@@ -299,6 +442,54 @@ impl SonosApp {
                     .map(|room| (room.name.clone(), room.ip))
             })
             .collect();
+
+        // Volume area: the group slider with steppers, or per-speaker
+        // sliders after a press-and-hold split.
+        let mut volume_rows: Vec<gpui::AnyElement> = Vec::new();
+        if split {
+            for (room_ix, room) in group.visible_rooms().enumerate() {
+                let room_volume = view.room_volumes.get(&room.uuid).copied().unwrap_or(0);
+                volume_rows.push(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(dim())
+                                .w(px(90.))
+                                .child(room.name.clone()),
+                        )
+                        .child(self.volume_slider(
+                            SliderTarget::Room {
+                                group: index,
+                                room: room_ix,
+                            },
+                            room_volume,
+                            cx,
+                        ))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(dim())
+                                .child(format!("{room_volume}%")),
+                        )
+                        .into_any_element(),
+                );
+            }
+        } else {
+            volume_rows.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(self.step_button(index, "−", -2, cx))
+                    .child(self.volume_slider(SliderTarget::Group(index), volume, cx))
+                    .child(self.step_button(index, "+", 2, cx))
+                    .into_any_element(),
+            );
+        }
 
         div()
             .id(("group", index))
@@ -374,15 +565,7 @@ impl SonosApp {
                     .text_color(if playing { rgb(0xd8d8de) } else { dim() })
                     .child(now_playing),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(self.step_button(index, "−", -2, cx))
-                    .child(self.volume_slider(index, volume, cx))
-                    .child(self.step_button(index, "+", 2, cx)),
-            )
+            .child(div().flex().flex_col().gap_1().children(volume_rows))
             .when(grouped, |card| {
                 card.child(div().flex().flex_wrap().gap_2().children(
                     group.visible_rooms().enumerate().map(|(chip_ix, room)| {

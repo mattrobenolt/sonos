@@ -5,21 +5,43 @@
 
 use std::net::Ipv4Addr;
 
-use super::{soap, Error, NowPlaying, Result};
+use super::{Error, NowPlaying, Result, soap};
 
 const AV_TRANSPORT: &str = "AVTransport";
 const GROUP_RENDERING: &str = "GroupRenderingControl";
 const AV_PATH: &str = "/MediaRenderer/AVTransport/Control";
 const GROUP_PATH: &str = "/MediaRenderer/GroupRenderingControl/Control";
+const RENDERING: &str = "RenderingControl";
+const RENDERING_PATH: &str = "/MediaRenderer/RenderingControl/Control";
 const INSTANCE: &str = "<InstanceID>0</InstanceID>";
+const CHANNEL: &str = "<InstanceID>0</InstanceID><Channel>Master</Channel>";
 
 pub fn group_volume(ip: Ipv4Addr) -> Result<u8> {
     let response = soap::call(ip, GROUP_RENDERING, GROUP_PATH, "GetGroupVolume", INSTANCE)?;
-    parse_group_volume(&response)
+    parse_volume(&response)
 }
 
-/// Pure: parse a GetGroupVolume SOAP response.
-pub fn parse_group_volume(response: &str) -> Result<u8> {
+/// Per-speaker volume (RenderingControl, Master channel). A bonded stereo
+/// pair is one visible room with one volume.
+pub fn room_volume(ip: Ipv4Addr) -> Result<u8> {
+    let response = soap::call(ip, RENDERING, RENDERING_PATH, "GetVolume", CHANNEL)?;
+    parse_volume(&response)
+}
+
+pub fn set_room_volume(ip: Ipv4Addr, volume: u8) -> Result<()> {
+    soap::call(
+        ip,
+        RENDERING,
+        RENDERING_PATH,
+        "SetVolume",
+        &format!("{CHANNEL}<DesiredVolume>{volume}</DesiredVolume>"),
+    )?;
+    Ok(())
+}
+
+/// Pure: parse a GetVolume/GetGroupVolume SOAP response (both return
+/// CurrentVolume).
+pub fn parse_volume(response: &str) -> Result<u8> {
     soap::text(response, "CurrentVolume")?
         .trim()
         .parse()
@@ -132,6 +154,12 @@ pub fn join(ip: Ipv4Addr, coordinator_uuid: &str) -> Result<()> {
 
 /// Break this player out of its group into a standalone group.
 pub fn leave(ip: Ipv4Addr) -> Result<()> {
-    soap::call(ip, AV_TRANSPORT, AV_PATH, "BecomeCoordinatorOfStandaloneGroup", INSTANCE)?;
+    soap::call(
+        ip,
+        AV_TRANSPORT,
+        AV_PATH,
+        "BecomeCoordinatorOfStandaloneGroup",
+        INSTANCE,
+    )?;
     Ok(())
 }

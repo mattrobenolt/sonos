@@ -5,4 +5,6 @@
 
 pub mod sonos;
 
-pub use sonos::{control, discover, snapshot, Error, Group, GroupView, NowPlaying, Result, Room, SystemState};
+pub use sonos::{
+    Error, Group, GroupView, NowPlaying, Result, Room, SystemState, control, discover, snapshot,
+};

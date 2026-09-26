@@ -34,8 +34,8 @@ pub fn discover(timeout: Duration) -> Result<Vec<Ipv4Addr>> {
                 }
             }
             Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut => {}
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+            }
             Err(e) => return Err(e.into()),
         }
     }

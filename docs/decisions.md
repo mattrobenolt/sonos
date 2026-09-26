@@ -32,6 +32,22 @@
 - Line-in/TV: RelTime/TrackDuration come back as NOT_IMPLEMENTED strings;
   filtered at the protocol layer (treated as absent). Now-playing falls back
   to "Playing (line-in / TV)" when playing with neither metadata nor times.
+- Per-speaker volume in groups: RenderingControl GetVolume/SetVolume
+  (Channel Master) per visible room — a bonded pair is one visible room with
+  one volume. Snapshot fetches per-room volumes in parallel (room_volumes
+  by room uuid; missing = unknown).
+- Press-and-hold (450 ms) on a volume slider splits the card into
+  per-speaker sliders; hold on any per-room slider merges back. A hold is a
+  mousedown-started 450 ms timer on the slider; drags and releases cancel it
+  (dropping the Task cancels the timer). Known edge: a release outside the
+  slider without ever dragging can leak the hold into a spurious split
+  toggle (rare, cosmetic).
+- Eager UI for grouping: join/leave fold locally through pure
+  SystemState::joined/left transforms (unit tested in tests/state.rs against
+  the topology fixture); the 2 s poll corrects. An eager join with a stale
+  target is a no-op rather than dropping the room from the UI.
+- Volume sends coalesce per VolumeTarget (group coordinator IP vs room IP);
+  the sender loop ships the newest value per target at 120 ms ticks.
 - Grouped cards are visually marked: accent outline, a "grouped"
   pill beside the label, and accent-tinted room chips; solo cards stay flat
   gray. A bonded stereo pair is one visible room and is never marked.

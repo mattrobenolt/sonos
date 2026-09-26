@@ -4,7 +4,7 @@
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
-use sonos::{discover, snapshot, SystemState};
+use sonos::{SystemState, discover, snapshot};
 
 /// The LAN tests mutate and observe the same physical household — libtest
 /// runs tests in parallel by default, so a concurrent observer reads a
@@ -65,7 +65,11 @@ fn snapshots_group_state() {
         );
     }
     for group in &state.groups {
-        assert!(group.volume.is_some(), "no volume for {}", group.group.label());
+        assert!(
+            group.volume.is_some(),
+            "no volume for {}",
+            group.group.label()
+        );
     }
     // The Office stereo pair always carries one invisible bonded twin,
     // whatever else is grouped with it.
@@ -124,7 +128,10 @@ fn join_and_leave_round_trip() {
     if was_grouped {
         sonos::sonos::control::leave(bedroom_ip).unwrap();
         let standalone = wait_for_state(&ips, standalone_shape);
-        assert!(standalone_shape(&standalone), "Bedroom did not leave Office");
+        assert!(
+            standalone_shape(&standalone),
+            "Bedroom did not leave Office"
+        );
         sonos::sonos::control::join(bedroom_ip, &office.group.coordinator_uuid).unwrap();
         let rejoined = wait_for_state(&ips, joined_shape);
         assert!(joined_shape(&rejoined), "Bedroom did not rejoin Office");
@@ -134,6 +141,9 @@ fn join_and_leave_round_trip() {
         assert!(joined_shape(&joined), "Bedroom did not join Office");
         sonos::sonos::control::leave(bedroom_ip).unwrap();
         let restored = wait_for_state(&ips, standalone_shape);
-        assert!(standalone_shape(&restored), "Bedroom did not return to standalone");
+        assert!(
+            standalone_shape(&restored),
+            "Bedroom did not return to standalone"
+        );
     }
 }
