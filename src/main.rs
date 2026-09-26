@@ -59,6 +59,15 @@ enum VolumeTarget {
     Room(Ipv4Addr),
 }
 
+/// GPUI's texture pipeline expects BGRA; the image crate decodes RGBA.
+/// Swap red and blue per pixel — the same conversion gpui's own asset
+/// loader performs on every decode path.
+fn to_bgra(image: &mut image::RgbaImage) {
+    for pixel in image.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+}
+
 /// Album art loader: fetch the upnp:albumArtURI over HTTP(S) off the UI
 /// thread, decode, and hand back a RenderImage. GPUI caches per source URL,
 /// so each track's art loads once.
@@ -86,7 +95,8 @@ impl Asset for AlbumArtAsset {
             if bytes.len() > 8 * 1024 * 1024 {
                 return Err(ImageCacheError::from(anyhow::anyhow!("art too large")));
             }
-            let rgba = image::load_from_memory(&bytes)?.into_rgba8();
+            let mut rgba = image::load_from_memory(&bytes)?.into_rgba8();
+            to_bgra(&mut rgba);
             let art = RenderImage::new(SmallVec::from_elem(image::Frame::new(rgba), 1));
             Ok(Arc::new(art))
         })
@@ -744,6 +754,18 @@ impl Render for SonosApp {
                 app.child(Self::note("No speakers found"))
             })
             .children(cards)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn art_pixels_swap_red_blue_to_bgra() {
+        let mut rgba = image::RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).unwrap();
+        to_bgra(&mut rgba);
+        assert_eq!(rgba.get_pixel(0, 0).0, [0, 0, 255, 255]);
     }
 }
 
