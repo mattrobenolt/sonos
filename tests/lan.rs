@@ -31,63 +31,90 @@ fn discovers_at_least_one_speaker() {
 fn snapshots_group_state() {
     let ips = discover(Duration::from_secs(3)).unwrap();
     let state = snapshot(&ips);
-    // The battery Move sleeps on and off the network, so assert the
-    // always-present groups by name, not a group count.
-    let labels: Vec<String> = state.groups.iter().map(|g| g.group.label()).collect();
+
+    // Assert ROOM presence, not group shape: the household may be grouped
+    // any way at test time, and the battery Move sleeps on and off the
+    // network (group counts change).
+    let room_names: Vec<String> = state
+        .groups
+        .iter()
+        .flat_map(|g| g.group.visible_rooms().map(|r| r.name.clone()))
+        .collect();
     for expected in ["Family Room", "Office", "Bedroom"] {
         assert!(
-            labels.iter().any(|label| label == expected),
-            "missing {expected} (groups: {labels:?})"
+            room_names.iter().any(|name| name == expected),
+            "missing room {expected} (rooms: {room_names:?})"
         );
     }
     for group in &state.groups {
         assert!(group.volume.is_some(), "no volume for {}", group.group.label());
     }
-    let office = state.groups.iter().find(|g| g.group.label() == "Office");
-    assert!(office.is_some(), "no Office group");
-    assert_eq!(office.unwrap().group.rooms.len(), 2, "Office stereo pair members");
-}
-
-#[test]
-#[ignore = "mutates: joins Bedroom to the Office pair, then restores it"]
-fn join_and_leave_round_trip() {
-    let ips = discover(Duration::from_secs(3)).unwrap();
-    let state = snapshot(&ips);
+    // The Office stereo pair always carries one invisible bonded twin,
+    // whatever else is grouped with it.
     let office = state
         .groups
         .iter()
-        .find(|g| g.group.label() == "Office")
-        .expect("Office group")
-        .clone();
-    let bedroom = state
-        .groups
-        .iter()
-        .find(|g| g.group.label() == "Bedroom")
-        .expect("Bedroom group")
-        .clone();
-
-    sonos::sonos::control::join(
-        bedroom.group.coordinator_ip().unwrap(),
-        &office.group.coordinator_uuid,
-    )
-    .unwrap();
-    let joined = wait_for_state(&ips, |state| {
-        state.groups.iter().any(|g| g.group.label() == "Office + Bedroom")
-    });
-    assert!(
-        joined.groups.iter().any(|g| g.group.label() == "Office + Bedroom"),
-        "Bedroom did not join Office"
+        .find(|g| g.group.visible_rooms().any(|r| r.name == "Office"))
+        .expect("Office room");
+    assert_eq!(
+        office.group.rooms.iter().filter(|r| r.invisible).count(),
+        1,
+        "Office pair invisible twin"
     );
+}
 
-    sonos::sonos::control::leave(bedroom.group.coordinator_ip().unwrap()).unwrap();
-    let restored = wait_for_state(&ips, |state| {
+#[test]
+#[ignore = "mutates: regroups Bedroom/Office either way, always restoring the starting shape"]
+fn join_and_leave_round_trip() {
+    let ips = discover(Duration::from_secs(3)).unwrap();
+    let state = snapshot(&ips);
+
+    // The household may be grouped any way at test time; find the rooms'
+    // current groups and end the test in the shape we found.
+    let group_with = |room: &str| {
+        state
+            .groups
+            .iter()
+            .find(|g| g.group.visible_rooms().any(|r| r.name == room))
+            .unwrap_or_else(|| panic!("no {room} room"))
+            .clone()
+    };
+    let office = group_with("Office");
+    let bedroom = group_with("Bedroom");
+    let bedroom_ip = bedroom
+        .group
+        .visible_rooms()
+        .find(|r| r.name == "Bedroom")
+        .unwrap()
+        .ip;
+    let was_grouped = office.group.coordinator_uuid == bedroom.group.coordinator_uuid;
+
+    let joined_shape = |state: &SystemState| {
+        state
+            .groups
+            .iter()
+            .any(|g| g.group.label() == "Bedroom + Office")
+    };
+    let standalone_shape = |state: &SystemState| {
         state
             .groups
             .iter()
             .any(|g| g.group.label() == "Bedroom" && g.group.rooms.len() == 1)
-    });
-    assert!(
-        restored.groups.iter().any(|g| g.group.label() == "Bedroom" && g.group.rooms.len() == 1),
-        "Bedroom did not return to standalone"
-    );
+    };
+
+    if was_grouped {
+        sonos::sonos::control::leave(bedroom_ip).unwrap();
+        let standalone = wait_for_state(&ips, standalone_shape);
+        assert!(standalone_shape(&standalone), "Bedroom did not leave Office");
+        sonos::sonos::control::join(bedroom_ip, &office.group.coordinator_uuid).unwrap();
+        let rejoined = wait_for_state(&ips, joined_shape);
+        assert!(joined_shape(&rejoined), "Bedroom did not rejoin Office");
+    } else {
+        sonos::sonos::control::join(bedroom_ip, &office.group.coordinator_uuid).unwrap();
+        let joined = wait_for_state(&ips, joined_shape);
+        assert!(joined_shape(&joined), "Bedroom did not join Office");
+        sonos::sonos::control::leave(bedroom_ip).unwrap();
+        let restored = wait_for_state(&ips, standalone_shape);
+        assert!(standalone_shape(&restored), "Bedroom did not return to standalone");
+    }
 }

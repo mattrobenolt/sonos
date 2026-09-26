@@ -32,8 +32,11 @@
 - Line-in/TV: RelTime/TrackDuration come back as NOT_IMPLEMENTED strings;
   filtered at the protocol layer (treated as absent). Now-playing falls back
   to "Playing (line-in / TV)" when playing with neither metadata nor times.
-- Groups sorted by label in snapshot(): the topology XML order shuffles on
-  group changes; the UI needed stable indices for drag payloads.
+- Ordering: groups sort alphabetically by label, and labels are canonical
+  (`visible_rooms()` returns name-sorted rooms) — a grouped card always reads
+  "Bedroom + Office" regardless of topology XML member order, and sits at its
+  alphabetically-first member's position. The topology XML order shuffles on
+  group changes; the UI also needed stable indices for drag payloads.
 - Window opens at 420x880 and the card column scrolls when it overflows
   (`.id("main").overflow_y_scroll()`). Auto-grow to content would mean
   resizing per snapshot — deliberately not done.

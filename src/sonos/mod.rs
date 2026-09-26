@@ -66,8 +66,12 @@ pub struct Group {
 }
 
 impl Group {
+    /// Visible rooms, alphabetical by name — canonical for labels and
+    /// chips so cards never jump when the topology XML shuffles members.
     pub fn visible_rooms(&self) -> impl Iterator<Item = &Room> {
-        self.rooms.iter().filter(|r| !r.invisible)
+        let mut rooms: Vec<&Room> = self.rooms.iter().filter(|r| !r.invisible).collect();
+        rooms.sort_by(|a, b| a.name.cmp(&b.name));
+        rooms.into_iter()
     }
 
     /// Display label: visible room names joined with " + ".
