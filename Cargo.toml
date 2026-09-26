@@ -9,3 +9,7 @@ edition = "2024"
 # zed-editor uses on darwin, where the Metal shader compiler is unavailable.
 gpui = { version = "0.2", features = ["runtime_shaders"] }
 roxmltree = "0.21"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+anyhow = "1"
+image = "0.25"
+smallvec = "1"

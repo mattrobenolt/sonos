@@ -95,6 +95,7 @@ impl Group {
 pub struct NowPlaying {
     pub title: Option<String>,
     pub artist: Option<String>,
+    pub album_art_uri: Option<String>,
     pub rel_time: Option<String>,
     pub track_duration: Option<String>,
 }

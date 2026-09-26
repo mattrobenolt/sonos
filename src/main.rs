@@ -9,10 +9,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{
-    App, Application, AsyncApp, Bounds, Context, DragMoveEvent, FontWeight, MouseButton, Render,
-    Task, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    rgb, size,
+    App, Application, Asset, AsyncApp, Bounds, Context, DragMoveEvent, FontWeight, ImageCacheError,
+    MouseButton, Render, RenderImage, Task, TitlebarOptions, WeakEntity, Window, WindowBounds,
+    WindowOptions, div, img, prelude::*, px, rgb, size,
 };
+use smallvec::SmallVec;
 use sonos::{GroupView, SystemState, control, discover, snapshot};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -56,6 +57,40 @@ struct PendingHold {
 enum VolumeTarget {
     Group(Ipv4Addr),
     Room(Ipv4Addr),
+}
+
+/// Album art loader: fetch the upnp:albumArtURI over HTTP(S) off the UI
+/// thread, decode, and hand back a RenderImage. GPUI caches per source URL,
+/// so each track's art loads once.
+struct AlbumArtAsset;
+
+impl Asset for AlbumArtAsset {
+    type Source = String;
+    type Output = Result<Arc<RenderImage>, ImageCacheError>;
+
+    fn load(
+        url: Self::Source,
+        cx: &mut App,
+    ) -> impl Future<Output = Self::Output> + Send + 'static {
+        cx.background_executor().spawn(async move {
+            let mut response = ureq::get(&url)
+                .config()
+                .timeout_global(Some(Duration::from_secs(8)))
+                .build()
+                .call()
+                .map_err(|e| ImageCacheError::from(anyhow::anyhow!("art fetch: {e}")))?;
+            let bytes = response
+                .body_mut()
+                .read_to_vec()
+                .map_err(|e| ImageCacheError::from(anyhow::anyhow!("art read: {e}")))?;
+            if bytes.len() > 8 * 1024 * 1024 {
+                return Err(ImageCacheError::from(anyhow::anyhow!("art too large")));
+            }
+            let rgba = image::load_from_memory(&bytes)?.into_rgba8();
+            let art = RenderImage::new(SmallVec::from_elem(image::Frame::new(rgba), 1));
+            Ok(Arc::new(art))
+        })
+    }
 }
 
 /// Invisible drag ghost; GPUI requires a Render view for drag sources.
@@ -421,6 +456,10 @@ impl SonosApp {
             _ => "Nothing playing".to_string(),
         };
 
+        let album_art_uri = view
+            .now_playing
+            .as_ref()
+            .and_then(|np| np.album_art_uri.clone());
         let coordinator_uuid = group.coordinator_uuid.clone();
         let multi_room = group.rooms.len() > 1;
         // Display signal for real multi-room groups (a bonded stereo pair is
@@ -471,12 +510,6 @@ impl SonosApp {
                             room_volume,
                             cx,
                         ))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(dim())
-                                .child(format!("{room_volume}%")),
-                        )
                         .into_any_element(),
                 );
             }
@@ -526,47 +559,70 @@ impl SonosApp {
                             }),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(dim())
-                                    .child(format!("{volume}%")),
-                            )
-                            .child(
-                                div()
-                                    .id(("add", index))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .size_5()
-                                    .rounded_full()
-                                    .bg(rgb(0x3a3a44))
-                                    .text_xs()
-                                    .cursor_pointer()
-                                    .hover(|this| this.bg(rgb(0x4a4a56)))
-                                    .child("+")
-                                    .on_click(cx.listener(
-                                        move |this, _: &gpui::ClickEvent, _, cx| {
-                                            this.add_menu = if this.add_menu == Some(index) {
-                                                None
-                                            } else {
-                                                Some(index)
-                                            };
-                                            cx.notify();
-                                        },
-                                    )),
-                            ),
+                        div().flex().items_center().gap_2().child(
+                            div()
+                                .id(("add", index))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size_5()
+                                .rounded_full()
+                                .bg(rgb(0x3a3a44))
+                                .text_xs()
+                                .cursor_pointer()
+                                .hover(|this| this.bg(rgb(0x4a4a56)))
+                                .child("+")
+                                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                                    this.add_menu = if this.add_menu == Some(index) {
+                                        None
+                                    } else {
+                                        Some(index)
+                                    };
+                                    cx.notify();
+                                })),
+                        ),
                     ),
             )
-            .child(
-                div()
+            .child(match album_art_uri {
+                Some(url) => div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        img(move |window: &mut Window, cx: &mut App| {
+                            window.use_asset::<AlbumArtAsset>(&url, cx)
+                        })
+                        .flex_none()
+                        .size(px(56.))
+                        .rounded_md()
+                        .with_loading(|| {
+                            div()
+                                .size(px(56.))
+                                .flex_none()
+                                .rounded_md()
+                                .bg(rgb(0x33333c))
+                                .into_any_element()
+                        })
+                        .with_fallback(|| {
+                            div()
+                                .size(px(56.))
+                                .flex_none()
+                                .rounded_md()
+                                .bg(rgb(0x33333c))
+                                .into_any_element()
+                        }),
+                    )
+                    .child(
+                        div()
+                            .text_color(if playing { rgb(0xd8d8de) } else { dim() })
+                            .child(now_playing),
+                    )
+                    .into_any_element(),
+                None => div()
                     .text_color(if playing { rgb(0xd8d8de) } else { dim() })
-                    .child(now_playing),
-            )
+                    .child(now_playing)
+                    .into_any_element(),
+            })
             .child(div().flex().flex_col().gap_1().children(volume_rows))
             .when(grouped, |card| {
                 card.child(div().flex().flex_wrap().gap_2().children(

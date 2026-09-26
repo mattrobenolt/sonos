@@ -48,6 +48,13 @@ fn parses_position_info() {
     assert!(np.rel_time.is_some());
     assert_eq!(np.title.as_deref(), Some("Eraser"));
     assert_eq!(np.artist.as_deref(), Some("Coheed and Cambria"));
+    assert!(
+        np.album_art_uri
+            .as_deref()
+            .is_some_and(|uri| uri.starts_with("https://")),
+        "album art uri missing: {:?}",
+        np.album_art_uri
+    );
 }
 
 #[test]
@@ -56,11 +63,16 @@ fn parses_didl_metadata() {
         "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\">\
          <item><dc:title xmlns:dc=\"http://purl.org/dc/elements/1.1/\">Fake Song</dc:title>\
          <dc:creator xmlns:dc=\"http://purl.org/dc/elements/1.1/\">Fake Artist</dc:creator>\
+         <upnp:albumArtURI xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">https://example.invalid/art.jpg</upnp:albumArtURI>\
          </item></DIDL-Lite>",
     )
     .unwrap();
     assert_eq!(didl.title, "Fake Song");
     assert_eq!(didl.artist.as_deref(), Some("Fake Artist"));
+    assert_eq!(
+        didl.album_art_uri.as_deref(),
+        Some("https://example.invalid/art.jpg")
+    );
 }
 
 #[test]

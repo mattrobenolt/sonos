@@ -60,6 +60,16 @@
   consumed before the retain that drops the emptied source group — the
   fixture unit test caught a stale-index bug that attached the family to
   the wrong group.
+- Album art: upnp:albumArtURI rides the existing DIDL parse. The UI
+  fetches it over HTTP(S) with ureq (rustls, 8 s timeout, 8 MB cap) on the
+  background executor, decodes with image 0.25 (matches gpui's version so
+  Frame types unify), and renders through gpui's Asset machinery —
+  img() + use_asset with with_loading/with_fallback placeholders, cached
+  per URL. Verified live: Plex serves art via plex.direct HTTPS (valid LE
+  certs, ~640 KB JPEGs). Art URIs embed live auth tokens (the Plex token in
+  the position fixture stays redacted) — never log or commit art URLs.
+- Volume % readouts removed (card header and per-room slider rows): the
+  bar is the readout.
 - Grouped cards are visually marked: accent outline, a "grouped"
   pill beside the label, and accent-tinted room chips; solo cards stay flat
   gray. A bonded stereo pair is one visible room and is never marked.

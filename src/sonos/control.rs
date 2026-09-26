@@ -96,6 +96,7 @@ pub fn parse_position(response: &str) -> Result<NowPlaying> {
     let mut now_playing = NowPlaying {
         title: None,
         artist: None,
+        album_art_uri: None,
         rel_time,
         track_duration,
     };
@@ -103,6 +104,7 @@ pub fn parse_position(response: &str) -> Result<NowPlaying> {
         if let Some(didl) = parse_didl(&meta) {
             now_playing.title = Some(didl.title);
             now_playing.artist = didl.artist;
+            now_playing.album_art_uri = didl.album_art_uri;
         }
     }
     Ok(now_playing)
@@ -115,10 +117,11 @@ fn clean_time(value: Option<String>) -> Option<String> {
 pub struct Didl {
     pub title: String,
     pub artist: Option<String>,
+    pub album_art_uri: Option<String>,
 }
 
-/// Extract title/creator from a DIDL-Lite metadata blob. Returns None for
-/// "NOT_IMPLEMENTED", empty, or otherwise unparseable metadata.
+/// Extract title/creator/album art from a DIDL-Lite metadata blob. Returns
+/// None for "NOT_IMPLEMENTED", empty, or otherwise unparseable metadata.
 pub fn parse_didl(meta: &str) -> Option<Didl> {
     if !meta.contains("<DIDL") {
         return None;
@@ -134,7 +137,16 @@ pub fn parse_didl(meta: &str) -> Option<Didl> {
         .find(|n| n.tag_name().name() == "creator")
         .and_then(|n| n.text())
         .map(|t| t.to_string());
-    Some(Didl { title, artist })
+    let album_art_uri = doc
+        .descendants()
+        .find(|n| n.tag_name().name() == "albumArtURI")
+        .and_then(|n| n.text())
+        .map(|t| t.to_string());
+    Some(Didl {
+        title,
+        artist,
+        album_art_uri,
+    })
 }
 
 /// Join this player to the group of `coordinator_uuid`
