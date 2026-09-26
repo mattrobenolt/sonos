@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use gpui::{
     App, Application, Asset, AsyncApp, Bounds, Context, DragMoveEvent, FontWeight, ImageCacheError,
-    MouseButton, Render, RenderImage, Task, TitlebarOptions, WeakEntity, Window, WindowBounds,
-    WindowOptions, div, img, prelude::*, px, rgb, size,
+    Menu, MenuItem, MouseButton, Render, RenderImage, SystemMenuType, Task, TitlebarOptions,
+    WeakEntity, Window, WindowBounds, WindowOptions, actions, div, img, prelude::*, px, rgb, size,
 };
 use smallvec::SmallVec;
 use sonos::{GroupView, SystemState, control, discover, snapshot};
@@ -769,8 +769,33 @@ mod tests {
     }
 }
 
+actions!(sonos, [Quit]);
+
+fn quit(_: &Quit, cx: &mut App) {
+    cx.quit();
+}
+
 fn main() {
     Application::new().run(|cx: &mut App| {
+        // The app menu gives a bundled app its Cmd-Q quit; without it there
+        // is no default menu to carry the shortcut.
+        cx.on_action(quit);
+        cx.set_menus(vec![Menu {
+            name: "Sonos".into(),
+            items: vec![
+                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                MenuItem::action("Quit Sonos", Quit),
+            ],
+        }]);
+        // Single-window utility behavior: closing the only window quits.
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+
         let bounds = Bounds::centered(None, size(px(420.), px(880.)), cx);
         cx.open_window(
             WindowOptions {

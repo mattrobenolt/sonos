@@ -8,6 +8,8 @@
     <string>Sonos</string>
     <key>CFBundleExecutable</key>
     <string>sonos</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>com.mattrobenolt.sonos</string>
     <key>CFBundleInfoDictionaryVersion</key>
