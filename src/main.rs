@@ -778,8 +778,10 @@ fn quit(_: &Quit, cx: &mut App) {
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        // The app menu gives a bundled app its Cmd-Q quit; without it there
-        // is no default menu to carry the shortcut.
+        // Menu item key equivalents come from the keymap — without this
+        // binding the Quit item builds with an empty key equivalent and
+        // Cmd-Q does nothing (verified in gpui's mac platform source).
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
         cx.on_action(quit);
         cx.set_menus(vec![Menu {
             name: "Sonos".into(),
