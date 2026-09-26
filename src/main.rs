@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use gpui::{
     App, Application, Asset, AsyncApp, Bounds, Context, DragMoveEvent, FontWeight, ImageCacheError,
-    Menu, MenuItem, MouseButton, Render, RenderImage, SystemMenuType, Task, TitlebarOptions,
-    WeakEntity, Window, WindowBounds, WindowOptions, actions, div, img, prelude::*, px, rgb, size,
+    KeyBinding, Menu, MenuItem, MouseButton, Render, RenderImage, SystemMenuType, Task,
+    TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, actions, div, img,
+    prelude::*, px, rgb, size,
 };
 use smallvec::SmallVec;
 use sonos::{GroupView, SystemState, control, discover, snapshot};
