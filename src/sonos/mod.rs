@@ -116,55 +116,102 @@ pub struct SystemState {
 }
 
 impl SystemState {
-    /// Eager-UI fold of a join: move the room into the target group locally
-    /// so the UI reflects it immediately; the poll corrects within an
-    /// interval. Pure — unit tested against the topology fixture.
+    /// A room plus its bonded hardware: within the room's group, all rooms
+    /// sharing the room's name travel together (stereo pairs and other
+    /// bonded sets share a ZoneName; grouped rooms keep distinct names).
+    fn room_family(&self, room_ip: Ipv4Addr) -> Option<(usize, Vec<Room>)> {
+        for (index, view) in self.groups.iter().enumerate() {
+            if let Some(room) = view.group.rooms.iter().find(|r| r.ip == room_ip) {
+                let name = room.name.clone();
+                let family: Vec<Room> = view
+                    .group
+                    .rooms
+                    .iter()
+                    .filter(|r| r.name == name)
+                    .cloned()
+                    .collect();
+                return Some((index, family));
+            }
+        }
+        None
+    }
+
+    /// Eager-UI fold of a join: move the room and its bonded hardware into
+    /// the target group locally so the UI reflects it immediately; the poll
+    /// corrects within an interval. Pure — unit tested against the topology
+    /// fixture.
     pub fn joined(mut self, room_ip: Ipv4Addr, coordinator_uuid: &str) -> Self {
-        let target_exists = self
-            .groups
-            .iter()
-            .any(|view| view.group.coordinator_uuid == coordinator_uuid);
-        let Some(room) = self
-            .groups
-            .iter()
-            .flat_map(|view| view.group.rooms.iter())
-            .find(|room| room.ip == room_ip)
-            .cloned()
-        else {
+        let Some((source, family)) = self.room_family(room_ip) else {
             return self;
         };
-        if !target_exists {
+        let target = self
+            .groups
+            .iter()
+            .position(|view| view.group.coordinator_uuid == coordinator_uuid);
+        let Some(target) = target else {
+            return self;
+        };
+        if source == target {
             return self;
         }
-        for view in self.groups.iter_mut() {
-            view.group.rooms.retain(|r| r.ip != room_ip);
+        let family_ips: Vec<Ipv4Addr> = family.iter().map(|r| r.ip).collect();
+        let family_uuids: Vec<String> = family.iter().map(|r| r.uuid.clone()).collect();
+        // Carry the family's per-room volumes over to the target.
+        let mut carried: HashMap<String, u8> = HashMap::new();
+        if let Some(view) = self.groups.get(source) {
+            for room in &family {
+                if let Some(volume) = view.room_volumes.get(&room.uuid) {
+                    carried.insert(room.uuid.clone(), *volume);
+                }
+            }
+        }
+        // Attach to the target FIRST: dropping the emptied source group
+        // below shifts indices, and a stale `target` index would attach the
+        // family to the wrong group (caught by the fixture unit test).
+        if let Some(view) = self.groups.get_mut(target) {
+            view.group.rooms.extend(family);
+            view.room_volumes.extend(carried);
+        }
+        if let Some(view) = self.groups.get_mut(source) {
+            view.group.rooms.retain(|r| !family_ips.contains(&r.ip));
+            view.room_volumes
+                .retain(|uuid, _| !family_uuids.contains(uuid));
         }
         self.groups.retain(|view| !view.group.rooms.is_empty());
-        if let Some(view) = self
-            .groups
-            .iter_mut()
-            .find(|view| view.group.coordinator_uuid == coordinator_uuid)
-        {
-            view.group.rooms.push(room);
-        }
         self.resort();
         self
     }
 
-    /// Eager-UI fold of a leave: the room becomes its own standalone group;
-    /// a group that lost its coordinator re-elects its first room.
+    /// Eager-UI fold of a leave: the room and its bonded hardware become
+    /// their own standalone group; a group that lost its coordinator
+    /// re-elects its first room.
     pub fn left(mut self, room_ip: Ipv4Addr) -> Self {
-        let Some(room) = self
-            .groups
-            .iter()
-            .flat_map(|view| view.group.rooms.iter())
-            .find(|room| room.ip == room_ip)
-            .cloned()
-        else {
+        let Some((source, family)) = self.room_family(room_ip) else {
             return self;
         };
-        for view in self.groups.iter_mut() {
-            view.group.rooms.retain(|r| r.ip != room_ip);
+        let family_ips: Vec<Ipv4Addr> = family.iter().map(|r| r.ip).collect();
+        let family_uuids: Vec<String> = family.iter().map(|r| r.uuid.clone()).collect();
+        // A standalone group's group volume is the visible room's volume.
+        let visible = family.iter().find(|r| !r.invisible).cloned();
+        let room_volume = self
+            .groups
+            .get(source)
+            .and_then(|view| {
+                visible
+                    .as_ref()
+                    .and_then(|r| view.room_volumes.get(&r.uuid))
+            })
+            .copied();
+        let mut room_volumes = HashMap::new();
+        if let Some(volume) = room_volume {
+            if let Some(room) = &visible {
+                room_volumes.insert(room.uuid.clone(), volume);
+            }
+        }
+        if let Some(view) = self.groups.get_mut(source) {
+            view.group.rooms.retain(|r| !family_ips.contains(&r.ip));
+            view.room_volumes
+                .retain(|uuid, _| !family_uuids.contains(uuid));
         }
         self.groups.retain(|view| !view.group.rooms.is_empty());
         for view in self.groups.iter_mut() {
@@ -179,21 +226,14 @@ impl SystemState {
                 }
             }
         }
-        // A standalone group's group volume is the room's own volume.
-        let room_volume = self
-            .groups
-            .iter()
-            .flat_map(|view| view.room_volumes.get(&room.uuid))
-            .copied()
-            .next();
-        let mut room_volumes = HashMap::new();
-        if let Some(volume) = room_volume {
-            room_volumes.insert(room.uuid.clone(), volume);
-        }
+        let coordinator_uuid = visible
+            .as_ref()
+            .map(|r| r.uuid.clone())
+            .unwrap_or_else(|| family[0].uuid.clone());
         self.groups.push(GroupView {
             group: Group {
-                coordinator_uuid: room.uuid.clone(),
-                rooms: vec![room],
+                coordinator_uuid,
+                rooms: family,
             },
             volume: room_volume,
             transport_state: None,

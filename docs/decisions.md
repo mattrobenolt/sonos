@@ -48,6 +48,18 @@
   target is a no-op rather than dropping the room from the UI.
 - Volume sends coalesce per VolumeTarget (group coordinator IP vs room IP);
   the sender loop ships the newest value per target at 120 ms ticks.
+- Join sources are groups with exactly one VISIBLE room — a bonded pair
+  is one standalone room (its invisible twin does not disqualify it), so
+  every card's menu offers every standalone room consistently. Rooms
+  already in a multi-room group are never offered as join sources: leave
+  via the chip's x, then join elsewhere. Verified live: the pair joins and
+  leaves as a unit (the twin travels with the primary).
+- Eager transforms move bonded hardware as a family: within a room's
+  group, all rooms sharing the room's name travel together (pairs share a
+  ZoneName; grouped rooms keep distinct names). Transform indices must be
+  consumed before the retain that drops the emptied source group — the
+  fixture unit test caught a stale-index bug that attached the family to
+  the wrong group.
 - Grouped cards are visually marked: accent outline, a "grouped"
   pill beside the label, and accent-tinted room chips; solo cards stay flat
   gray. A bonded stereo pair is one visible room and is never marked.

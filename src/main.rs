@@ -428,17 +428,19 @@ impl SonosApp {
         let grouped = group.visible_rooms().count() > 1;
         let split = self.split.contains(&coordinator_uuid);
 
-        // Rooms that can join this group: standalone rooms from other groups.
+        // Join sources are other groups' standalone rooms: exactly one
+        // visible room (a bonded pair counts as one standalone room; its
+        // invisible twin does not disqualify it). Rooms already in a
+        // multi-room group leave via their chip's x, then join elsewhere.
         let joinable: Vec<(String, Ipv4Addr)> = state
             .groups
             .iter()
             .enumerate()
-            .filter(|(i, g)| *i != index && g.group.rooms.len() == 1)
+            .filter(|(i, g)| *i != index && g.group.visible_rooms().count() == 1)
             .filter_map(|(_, g)| {
                 g.group
-                    .rooms
-                    .first()
-                    .filter(|room| !room.invisible)
+                    .visible_rooms()
+                    .next()
                     .map(|room| (room.name.clone(), room.ip))
             })
             .collect();

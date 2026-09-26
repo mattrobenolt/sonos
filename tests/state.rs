@@ -7,6 +7,7 @@ use sonos::sonos::topology::parse_groups;
 use sonos::{GroupView, SystemState};
 
 const BEDROOM_IP: &str = "192.168.2.114";
+const OFFICE_PRIMARY_IP: &str = "192.168.2.91";
 
 fn fixture_state() -> SystemState {
     let xml = std::fs::read_to_string("tests/fixtures/zonegroupstate.xml").unwrap();
@@ -73,6 +74,33 @@ fn eager_leave_restores_standalone() {
             .groups
             .iter()
             .any(|view| view.group.label() == "Office" && view.group.rooms.len() == 2)
+    );
+}
+
+#[test]
+fn eager_join_moves_a_bonded_pair_as_a_unit() {
+    let state = fixture_state();
+    let bedroom = state
+        .groups
+        .iter()
+        .find(|view| view.group.label() == "Bedroom")
+        .unwrap()
+        .group
+        .coordinator_uuid
+        .clone();
+    let joined = state.joined(OFFICE_PRIMARY_IP.parse().unwrap(), &bedroom);
+
+    assert_eq!(joined.groups.len(), 3);
+    let merged = joined
+        .groups
+        .iter()
+        .find(|view| view.group.label() == "Bedroom + Office")
+        .expect("merged group");
+    assert_eq!(merged.group.visible_rooms().count(), 2);
+    assert_eq!(
+        merged.group.rooms.len(),
+        3,
+        "bonded twin travels with the pair"
     );
 }
 

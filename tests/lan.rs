@@ -86,6 +86,61 @@ fn snapshots_group_state() {
 }
 
 #[test]
+#[ignore = "mutates: joins the Office pair to Bedroom and back, always restoring the starting shape"]
+fn pair_joins_and_leaves_as_a_unit() {
+    let _guard = lan_guard();
+    let ips = discover(Duration::from_secs(3)).unwrap();
+    let state = snapshot(&ips);
+
+    let group_with = |room: &str| {
+        state
+            .groups
+            .iter()
+            .find(|g| g.group.visible_rooms().any(|r| r.name == room))
+            .unwrap_or_else(|| panic!("no {room} room"))
+            .clone()
+    };
+    let bedroom = group_with("Bedroom");
+    let office = group_with("Office");
+    let pair_ip = office
+        .group
+        .visible_rooms()
+        .find(|r| r.name == "Office")
+        .unwrap()
+        .ip;
+    let was_grouped = bedroom.group.coordinator_uuid == office.group.coordinator_uuid;
+
+    let merged_shape = |state: &SystemState| {
+        state
+            .groups
+            .iter()
+            .any(|g| g.group.label() == "Bedroom + Office" && g.group.rooms.len() == 3)
+    };
+    let split_shape = |state: &SystemState| {
+        state
+            .groups
+            .iter()
+            .any(|g| g.group.label() == "Office" && g.group.rooms.len() == 2)
+    };
+
+    if was_grouped {
+        sonos::sonos::control::leave(pair_ip).unwrap();
+        let split = wait_for_state(&ips, split_shape);
+        assert!(split_shape(&split), "pair did not leave Bedroom");
+        sonos::sonos::control::join(pair_ip, &bedroom.group.coordinator_uuid).unwrap();
+        let merged = wait_for_state(&ips, merged_shape);
+        assert!(merged_shape(&merged), "pair did not rejoin Bedroom");
+    } else {
+        sonos::sonos::control::join(pair_ip, &bedroom.group.coordinator_uuid).unwrap();
+        let merged = wait_for_state(&ips, merged_shape);
+        assert!(merged_shape(&merged), "pair did not join Bedroom");
+        sonos::sonos::control::leave(pair_ip).unwrap();
+        let split = wait_for_state(&ips, split_shape);
+        assert!(split_shape(&split), "pair did not return to standalone");
+    }
+}
+
+#[test]
 #[ignore = "mutates: regroups Bedroom/Office either way, always restoring the starting shape"]
 fn join_and_leave_round_trip() {
     let _guard = lan_guard();
