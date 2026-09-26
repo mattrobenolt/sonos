@@ -9,10 +9,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, AsyncApp, Bounds, Context, DragMoveEvent,
-    FontWeight, Render, Task, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions,
+    App, Application, AsyncApp, Bounds, Context, DragMoveEvent, FontWeight, Render, Task,
+    TitlebarOptions, WeakEntity, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb,
+    size,
 };
-use sonos::{control, discover, snapshot, GroupView, SystemState};
+use sonos::{GroupView, SystemState, control, discover, snapshot};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const DISCOVER_TIMEOUT: Duration = Duration::from_secs(2);
@@ -97,26 +98,27 @@ impl SonosApp {
                 }
             }
         });
-        let poll = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| loop {
-            let ips = cx
-                .background_executor()
-                .spawn(async move { discover(DISCOVER_TIMEOUT).unwrap_or_default() })
-                .await;
-            let snapshot_ips = ips.clone();
-            let state = cx
-                .background_executor()
-                .spawn(async move { snapshot(&snapshot_ips) })
-                .await;
-            let has_groups = !state.groups.is_empty();
-            this
-                .update(cx, |this, cx| {
+        let poll = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                let ips = cx
+                    .background_executor()
+                    .spawn(async move { discover(DISCOVER_TIMEOUT).unwrap_or_default() })
+                    .await;
+                let snapshot_ips = ips.clone();
+                let state = cx
+                    .background_executor()
+                    .spawn(async move { snapshot(&snapshot_ips) })
+                    .await;
+                let has_groups = !state.groups.is_empty();
+                this.update(cx, |this, cx| {
                     if has_groups || this.state.is_none() {
                         this.state = Some(state);
                     }
                     cx.notify();
                 })
                 .ok();
-            cx.background_executor().timer(POLL_INTERVAL).await;
+                cx.background_executor().timer(POLL_INTERVAL).await;
+            }
         });
         Self {
             state: None,
@@ -139,7 +141,12 @@ impl SonosApp {
     }
 
     fn coordinator_ip(&self, group: usize) -> Option<Ipv4Addr> {
-        self.state.as_ref()?.groups.get(group)?.group.coordinator_ip()
+        self.state
+            .as_ref()?
+            .groups
+            .get(group)?
+            .group
+            .coordinator_ip()
     }
 
     fn set_volume(&mut self, group: usize, volume: u8, cx: &mut Context<Self>) {
@@ -181,9 +188,19 @@ impl SonosApp {
         div().text_color(dim()).child(text.to_string())
     }
 
-    fn step_button(&self, index: usize, label: &str, delta: i32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn step_button(
+        &self,
+        index: usize,
+        label: &str,
+        delta: i32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         div()
-            .id(if delta < 0 { ("minus", index) } else { ("plus", index) })
+            .id(if delta < 0 {
+                ("minus", index)
+            } else {
+                ("plus", index)
+            })
             .flex()
             .items_center()
             .justify_center()
@@ -206,10 +223,9 @@ impl SonosApp {
             .w(px(SLIDER_WIDTH))
             .h_6()
             .cursor_pointer()
-            .on_drag(
-                SliderDrag { group: index },
-                |_: &SliderDrag, _, _, cx| cx.new(|_| SliderGhost {}),
-            )
+            .on_drag(SliderDrag { group: index }, |_: &SliderDrag, _, _, cx| {
+                cx.new(|_| SliderGhost {})
+            })
             .on_drag_move::<SliderDrag>(cx.listener(
                 move |this, ev: &DragMoveEvent<SliderDrag>, _, cx| {
                     // During a drag, every on_drag_move listener of this
@@ -217,8 +233,7 @@ impl SonosApp {
                     if ev.drag(cx).group != index {
                         return;
                     }
-                    let fraction =
-                        (ev.event.position.x - ev.bounds.left()) / ev.bounds.size.width;
+                    let fraction = (ev.event.position.x - ev.bounds.left()) / ev.bounds.size.width;
                     let volume = (fraction.clamp(0., 1.) * 100.).round() as u8;
                     this.set_volume(index, volume, cx);
                 },
@@ -322,7 +337,12 @@ impl SonosApp {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(div().text_xs().text_color(dim()).child(format!("{volume}%")))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(dim())
+                                    .child(format!("{volume}%")),
+                            )
                             .child(
                                 div()
                                     .id(("add", index))
@@ -363,12 +383,9 @@ impl SonosApp {
                     .child(self.volume_slider(index, volume, cx))
                     .child(self.step_button(index, "+", 2, cx)),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(group.visible_rooms().enumerate().map(|(chip_ix, room)| {
+            .when(grouped, |card| {
+                card.child(div().flex().flex_wrap().gap_2().children(
+                    group.visible_rooms().enumerate().map(|(chip_ix, room)| {
                         let room_ip = room.ip;
                         let can_leave = multi_room && room.uuid != coordinator_uuid;
                         div()
@@ -379,7 +396,11 @@ impl SonosApp {
                             .px_2()
                             .py_1()
                             .rounded_md()
-                            .bg(if grouped { rgb(0x3f3826) } else { rgb(0x33333c) })
+                            .bg(if grouped {
+                                rgb(0x3f3826)
+                            } else {
+                                rgb(0x33333c)
+                            })
                             .text_xs()
                             .child(room.name.clone())
                             .when(can_leave, |chip| {
@@ -392,37 +413,43 @@ impl SonosApp {
                                         },
                                     ))
                             })
-                    })),
-            )
-            .when(self.add_menu == Some(index) && !joinable.is_empty(), |card| {
-                card.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .p_2()
-                        .rounded_md()
-                        .bg(rgb(0x1f1f24))
-                        .child(div().text_xs().text_color(dim()).child("Add a room"))
-                        .children(joinable.iter().enumerate().map(|(join_ix, (name, room_ip))| {
-                            let coordinator_uuid = coordinator_uuid.clone();
-                            let room_ip = *room_ip;
-                            div()
-                                .id(("join", index * 16 + join_ix))
-                                .px_2()
-                                .py_1()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .hover(|this| this.bg(rgb(0x3a3a44)))
-                                .child(name.clone())
-                                .on_click(cx.listener(
-                                    move |this, _: &gpui::ClickEvent, _, cx| {
-                                        this.join(room_ip, coordinator_uuid.clone(), cx);
-                                    },
-                                ))
-                        })),
-                )
+                    }),
+                ))
             })
+            .when(
+                self.add_menu == Some(index) && !joinable.is_empty(),
+                |card| {
+                    card.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .p_2()
+                            .rounded_md()
+                            .bg(rgb(0x1f1f24))
+                            .child(div().text_xs().text_color(dim()).child("Add a room"))
+                            .children(joinable.iter().enumerate().map(
+                                |(join_ix, (name, room_ip))| {
+                                    let coordinator_uuid = coordinator_uuid.clone();
+                                    let room_ip = *room_ip;
+                                    div()
+                                        .id(("join", index * 16 + join_ix))
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .hover(|this| this.bg(rgb(0x3a3a44)))
+                                        .child(name.clone())
+                                        .on_click(cx.listener(
+                                            move |this, _: &gpui::ClickEvent, _, cx| {
+                                                this.join(room_ip, coordinator_uuid.clone(), cx);
+                                            },
+                                        ))
+                                },
+                            )),
+                    )
+                },
+            )
     }
 }
 
@@ -452,7 +479,12 @@ impl Render for SonosApp {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child("Sonos"))
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Sonos"),
+                    )
                     .when_some(state.as_ref().map(|s| s.groups.len()), |header, len| {
                         header.child(
                             div()
@@ -465,10 +497,9 @@ impl Render for SonosApp {
             .when(state.is_none(), |app| {
                 app.child(Self::note("Looking for speakers…"))
             })
-            .when(
-                state.as_ref().is_some_and(|s| s.groups.is_empty()),
-                |app| app.child(Self::note("No speakers found")),
-            )
+            .when(state.as_ref().is_some_and(|s| s.groups.is_empty()), |app| {
+                app.child(Self::note("No speakers found"))
+            })
             .children(cards)
     }
 }
