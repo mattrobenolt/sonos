@@ -70,6 +70,23 @@
   the position fixture stays redacted) — never log or commit art URLs.
 - Volume % readouts removed (card header and per-room slider rows): the
   bar is the readout.
+
+## Bundling (2026-09-26)
+
+- `just app` assembles build/Sonos.app by hand: release binary +
+  misc/Info.plist template (version pulled mechanically from Cargo.toml's
+  [package] version — no invented bundle version), plutil-linted, ad-hoc
+  signed. `just run` launches via `open` (the LaunchServices path, not
+  cargo). `just install` copies to /Applications. Verified: bundle
+  launches via `open` and runs.
+- Ad-hoc signing suffices for personal sideload; notarization only
+  matters for distribution, and the quarantine/Gatekeeper dance only
+  applies to downloaded apps — locally built ones are clean.
+- Deliberate defaults: bundle id com.mattrobenolt.sonos; regular dock app
+  (no LSUIElement — the window is the whole product); no icon yet
+  (Resources/ empty; iconutil PNG->icns later). End state if wanted: a
+  flake package output (nix build .#sonos-app → result/Sonos.app), the
+  nixpkgs zed-editor pattern — requires cargo-dep vendoring (cargoHash).
 - Grouped cards are visually marked: accent outline, a "grouped"
   pill beside the label, and accent-tinted room chips; solo cards stay flat
   gray. A bonded stereo pair is one visible room and is never marked.
