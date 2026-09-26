@@ -6,6 +6,22 @@ use std::time::{Duration, Instant};
 
 use sonos::{discover, snapshot, SystemState};
 
+/// The LAN tests mutate and observe the same physical household — libtest
+/// runs tests in parallel by default, so a concurrent observer reads a
+/// round-trip mid-join as a genuinely grouped household (a real failure:
+/// snapshots saw "Bedroom + Office" and "3 groups" mid-round-trip, which
+/// was first — wrongly — blamed on the Move napping). Serialize on this.
+static LAN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Poison-recovering guard: a failed test must not block the next one —
+/// each test restores the shape it found, so a re-run heals state.
+fn lan_guard() -> std::sync::MutexGuard<'static, ()> {
+    match LAN_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 /// Poll snapshots until `check` passes or the deadline elapses. Sonos
 /// propagates topology changes asynchronously; fixed sleeps flake.
 fn wait_for_state(ips: &[Ipv4Addr], check: impl Fn(&SystemState) -> bool) -> SystemState {
@@ -22,6 +38,7 @@ fn wait_for_state(ips: &[Ipv4Addr], check: impl Fn(&SystemState) -> bool) -> Sys
 #[test]
 #[ignore = "hits the LAN"]
 fn discovers_at_least_one_speaker() {
+    let _guard = lan_guard();
     let ips = discover(Duration::from_secs(3)).unwrap();
     assert!(!ips.is_empty(), "no ZonePlayer SSDP responses");
 }
@@ -29,6 +46,7 @@ fn discovers_at_least_one_speaker() {
 #[test]
 #[ignore = "hits the LAN"]
 fn snapshots_group_state() {
+    let _guard = lan_guard();
     let ips = discover(Duration::from_secs(3)).unwrap();
     let state = snapshot(&ips);
 
@@ -66,6 +84,7 @@ fn snapshots_group_state() {
 #[test]
 #[ignore = "mutates: regroups Bedroom/Office either way, always restoring the starting shape"]
 fn join_and_leave_round_trip() {
+    let _guard = lan_guard();
     let ips = discover(Duration::from_secs(3)).unwrap();
     let state = snapshot(&ips);
 
