@@ -32,6 +32,9 @@
 - Line-in/TV: RelTime/TrackDuration come back as NOT_IMPLEMENTED strings;
   filtered at the protocol layer (treated as absent). Now-playing falls back
   to "Playing (line-in / TV)" when playing with neither metadata nor times.
+- Grouped cards are visually marked (v1.2): accent outline, a "grouped"
+  pill beside the label, and accent-tinted room chips; solo cards stay flat
+  gray. A bonded stereo pair is one visible room and is never marked.
 - Ordering: groups sort alphabetically by label, and labels are canonical
   (`visible_rooms()` returns name-sorted rooms) — a grouped card always reads
   "Bedroom + Office" regardless of topology XML member order, and sits at its

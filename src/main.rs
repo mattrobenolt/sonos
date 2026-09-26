@@ -266,6 +266,9 @@ impl SonosApp {
 
         let coordinator_uuid = group.coordinator_uuid.clone();
         let multi_room = group.rooms.len() > 1;
+        // Display signal for real multi-room groups (a bonded stereo pair is
+        // one visible room, not a group).
+        let grouped = group.visible_rooms().count() > 1;
 
         // Rooms that can join this group: standalone rooms from other groups.
         let joinable: Vec<(String, Ipv4Addr)> = state
@@ -290,12 +293,30 @@ impl SonosApp {
             .p_4()
             .rounded_lg()
             .bg(rgb(0x26262c))
+            .when(grouped, |card| card.border_1().border_color(rgb(0x5c4a26)))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_lg().child(group.label()))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_lg().child(group.label()))
+                            .when(grouped, |row| {
+                                row.child(
+                                    div()
+                                        .px_2()
+                                        .rounded_full()
+                                        .bg(rgb(0x3a3123))
+                                        .text_xs()
+                                        .text_color(accent())
+                                        .child("grouped"),
+                                )
+                            }),
+                    )
                     .child(
                         div()
                             .flex()
@@ -358,7 +379,7 @@ impl SonosApp {
                             .px_2()
                             .py_1()
                             .rounded_md()
-                            .bg(rgb(0x33333c))
+                            .bg(if grouped { rgb(0x3f3826) } else { rgb(0x33333c) })
                             .text_xs()
                             .child(room.name.clone())
                             .when(can_leave, |chip| {
