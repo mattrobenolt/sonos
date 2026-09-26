@@ -37,6 +37,10 @@
 - Window opens at 420x880 and the card column scrolls when it overflows
   (`.id("main").overflow_y_scroll()`). Auto-grow to content would mean
   resizing per snapshot — deliberately not done.
+- LAN test hardening: the battery Move sleeps on and off the network (its
+  group flaps in/out of topology — caught as a real `got 3 groups` failure),
+  so tests assert always-present groups by name, never a group count; and
+  topology-settle assertions poll to an 8s deadline instead of fixed sleeps.
 
 ## Scope — macOS Sonos controller, LAN-only (2026-09-25)
 
