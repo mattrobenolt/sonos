@@ -500,6 +500,8 @@ impl SonosApp {
                                 .text_xs()
                                 .text_color(dim())
                                 .w(px(90.))
+                                .flex_none()
+                                .truncate()
                                 .child(room.name.clone()),
                         )
                         .child(self.volume_slider(
