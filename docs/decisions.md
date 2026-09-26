@@ -1,6 +1,6 @@
 # Decisions
 
-## App v1 (2026-09-25, c1f8b7d)
+## App (2026-09-25, c1f8b7d)
 
 - One window, dark card per group: label, now-playing line, drag volume
   slider (on_drag + on_drag_move; DragMoveEvent carries element bounds),
@@ -19,7 +19,7 @@
   position fixture is redacted) + #[ignore] LAN tests including a
   join/leave round trip that restores state.
 
-## v1.1 fixes from first use (2026-09-25)
+## First-use fixes (2026-09-25)
 
 - **Slider cross-talk + volume lag had one root cause:** `on_drag_move` fires
   on EVERY element whose listener matches the drag payload's `TypeId`, not
@@ -32,7 +32,7 @@
 - Line-in/TV: RelTime/TrackDuration come back as NOT_IMPLEMENTED strings;
   filtered at the protocol layer (treated as absent). Now-playing falls back
   to "Playing (line-in / TV)" when playing with neither metadata nor times.
-- Grouped cards are visually marked (v1.2): accent outline, a "grouped"
+- Grouped cards are visually marked: accent outline, a "grouped"
   pill beside the label, and accent-tinted room chips; solo cards stay flat
   gray. A bonded stereo pair is one visible room and is never marked.
 - Ordering: groups sort alphabetically by label, and labels are canonical
